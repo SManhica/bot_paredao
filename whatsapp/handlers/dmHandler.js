@@ -1,4 +1,4 @@
-const { normalizeText } = require('../helpers/messageUtils');
+const { normalizeText } = require('../../utils/messageUtils');
 
 class DMHandler {
   constructor({ db, manager }) {

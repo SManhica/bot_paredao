@@ -1,4 +1,4 @@
-const { getMentionedIds } = require('../helpers/messageUtils');
+const { getMentionedIds } = require('../../utils/messageUtils');
 
 class SupremoHandler {
   constructor(supremoCommands) {

@@ -2,7 +2,7 @@ const DMHandler = require('../whatsapp/handlers/dmHandler');
 const GroupGameHandler = require('../whatsapp/handlers/groupGameHandler');
 const ImpostorGameManager = require('../games/impostor/ImpostorGameManager');
 const SupremoHandler = require('../whatsapp/handlers/supremoHandler');
-const { normalizeText } = require('../whatsapp/helpers/messageUtils');
+const { normalizeText } = require('../utils/messageUtils');
 
 class BotApplication {
   constructor({ client, db, manager, supremoCommands }) {
