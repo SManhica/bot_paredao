@@ -1,11 +1,18 @@
 const SUPREMO_ID = process.env.SUPREMO_ID || '';
 const SUPREMO_GROUP_ID = process.env.SUPREMO_GROUP_ID || '';
+const db = require('./database');
 
 class SupremoCommands {
   constructor(client, gameManager) {
     this.client = client;
     this.manager = gameManager;
     this.bansInProgress = new Map();
+    this.powerTimers = new Map();
+  }
+
+  async getDisplayName(userId) {
+    const contact = await this.client.getContactById(userId).catch(() => null);
+    return contact?.name || contact?.pushname || userId.split('@')[0];
   }
 
   // ✅ CORREÇÃO: Usar this.manager.isSupremo() em vez de this.manager.db
@@ -36,6 +43,8 @@ class SupremoCommands {
       `!ban @membro - Banir com contagem regressiva épica\n` +
       `!randomban - Banir aleatoriamente alguém (surpresa!)\n` +
       `!poder - Mostrar seu poder atual\n` +
+      `!poder @membro [min] - Conceder admin temporário\n` +
+      `!tirarpoder @membro - Revogar poder/admin temporário\n` +
       `!humilhar @membro - Mensagem de humilhação leve\n` +
       `!elogiofake @membro - Elogio que vira insulto\n\n` +
       `🎭 *COMANDOS TROLL:*\n` +
@@ -267,6 +276,123 @@ class SupremoCommands {
       `🏆 *Título Atual:* ${randomTitle}\n\n` +
       `⚠️ *Aviso:* Poder excessivo pode causar inveja em subordinados!`
     );
+  }
+
+  async grantPower(chat, senderId, targetId, durationMinutes = null) {
+    const isSupremo = await this.isSupremo(senderId);
+    if (!isSupremo) {
+      await chat.sendMessage('❌ Você não pode conceder poder. Volte quando tiver uma coroa.');
+      return;
+    }
+
+    if (await this.isSupremo(targetId)) {
+      await chat.sendMessage('👑 O SUPREMO já nasceu com poder infinito. Comando redundante detectado.');
+      return;
+    }
+
+    try {
+      await db.promoteToAdmin(targetId);
+
+      if (typeof chat.promoteParticipants === 'function') {
+        await chat.promoteParticipants([targetId]).catch(() => null);
+      }
+
+      const targetName = await this.getDisplayName(targetId);
+      const mentionText = `@${targetId.split('@')[0]}`;
+
+      if (this.powerTimers.has(targetId)) {
+        clearTimeout(this.powerTimers.get(targetId));
+        this.powerTimers.delete(targetId);
+      }
+
+      if (durationMinutes && durationMinutes > 0) {
+        const timeoutMs = durationMinutes * 60 * 1000;
+        const timeout = setTimeout(async () => {
+          await this.revokePower(chat, senderId, targetId, true);
+        }, timeoutMs);
+        this.powerTimers.set(targetId, timeout);
+
+        await chat.sendMessage(
+          `⚡ *PODER TEMPORÁRIO CONCEDIDO* ⚡\n\n` +
+          `${mentionText}, parabéns! Você foi promovido a admin por *${durationMinutes} minuto(s)*.\n` +
+          `🧠 *Use com sabedoria... ou eu retiro com sarcasmo dobrado.*`,
+          { mentions: [await this.client.getContactById(targetId).catch(() => null)].filter(Boolean) }
+        );
+        return;
+      }
+
+      await chat.sendMessage(
+        `⚡ *PODER DEFINITIVO (POR ENQUANTO)* ⚡\n\n` +
+        `${mentionText}, ${targetName} agora tem poderes administrativos.\n` +
+        `😈 *Não me faça arrepender desta decisão imperial.*`,
+        { mentions: [await this.client.getContactById(targetId).catch(() => null)].filter(Boolean) }
+      );
+    } catch (error) {
+      console.error('Erro ao conceder poder:', error);
+      await chat.sendMessage('❌ Falha ao conceder poder. Talvez os deuses do WhatsApp estejam de folga.');
+    }
+  }
+
+  async revokePower(chat, senderId, targetId, isAuto = false) {
+    const isSupremo = await this.isSupremo(senderId);
+    if (!isSupremo && !isAuto) {
+      await chat.sendMessage('❌ Sem coroa, sem revogação.');
+      return;
+    }
+
+    try {
+      if (this.powerTimers.has(targetId)) {
+        clearTimeout(this.powerTimers.get(targetId));
+        this.powerTimers.delete(targetId);
+      }
+
+      await db.demoteAdmin(targetId);
+
+      if (typeof chat.demoteParticipants === 'function') {
+        await chat.demoteParticipants([targetId]).catch(() => null);
+      }
+
+      const mentionText = `@${targetId.split('@')[0]}`;
+      const payload = { mentions: [await this.client.getContactById(targetId).catch(() => null)].filter(Boolean) };
+
+      if (isAuto) {
+        await chat.sendMessage(
+          `⏰ *TEMPO ESGOTADO* ⏰\n\n${mentionText}, seu poder expirou.\n` +
+          `👑 *O trono agradece os serviços prestados e recolhe a coroa.*`,
+          payload
+        );
+        return;
+      }
+
+      await chat.sendMessage(
+        `🧯 *PODER REVOGADO* 🧯\n\n${mentionText}, seus privilégios administrativos foram retirados.\n` +
+        `📉 *Desça do salto, subordinado.*`,
+        payload
+      );
+    } catch (error) {
+      console.error('Erro ao revogar poder:', error);
+      await chat.sendMessage('❌ Falha ao revogar poder. O caos venceu esta rodada.');
+    }
+  }
+
+  async welcomeNewMember(chat, memberId) {
+    try {
+      const name = await this.getDisplayName(memberId);
+      const mention = `@${memberId.split('@')[0]}`;
+      const contact = await this.client.getContactById(memberId).catch(() => null);
+
+      await chat.sendMessage(
+        `👑 *BOAS-VINDAS DO SUPREMO* 👑\n\n` +
+        `${mention}, seja bem-vindo(a), ${name}.\n` +
+        `📜 Regras simples:\n` +
+        `1) Respeite o trono\n` +
+        `2) Use !comandos para jogar\n` +
+        `3) Não tente tomar meu lugar 😌`,
+        contact ? { mentions: [contact] } : undefined
+      );
+    } catch (error) {
+      console.error('Erro ao enviar boas-vindas do Supremo:', error);
+    }
   }
 
   // Comando de humilhação leve
