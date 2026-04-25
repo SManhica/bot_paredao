@@ -1,4 +1,4 @@
-const { getMentionedIds } = require('../helpers/messageUtils');
+const { getMentionedIds } = require('../../utils/messageUtils');
 const { listGames, isSupportedGame } = require('../../games/core/gameRegistry');
 const { parseTurnSettings } = require('../../games/paredao/constants');
 
