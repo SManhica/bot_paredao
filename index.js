@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const BotApplication = require('./app/BotApplication');
+const puppeteer = require('puppeteer');
 
 
 function startHealthServer() {
@@ -45,8 +46,21 @@ function startHealthServer() {
   });
 }
 
+function resolveChromeExecutablePath() {
+  if (process.env.CHROME_PATH) {
+    return process.env.CHROME_PATH;
+  }
+
+  try {
+    return puppeteer.executablePath();
+  } catch (error) {
+    console.warn('⚠️ Não foi possível resolver o Chrome do Puppeteer automaticamente:', error.message);
+    return undefined;
+  }
+}
+
 function createClient() {
-  const executablePath = process.env.CHROME_PATH || undefined;
+  const executablePath = resolveChromeExecutablePath();
   const headless = process.env.WWEBJS_HEADLESS ? process.env.WWEBJS_HEADLESS !== 'false' : true;
 
   return new Client({
