@@ -31,6 +31,12 @@ class GroupGameHandler {
     return selected;
   }
 
+  async resolveRuntimeGame(groupId, configuredGame) {
+    if (configuredGame && configuredGame !== 'auto') return configuredGame;
+    const activeAny = await this.manager.getActiveGame(groupId);
+    return activeAny?.game_type || 'paredao';
+  }
+
   async setSelectedGame(groupId, gameName) {
     this.selectedGameByGroup.set(groupId, gameName);
     await this.manager.setSelectedGame(groupId, gameName);
@@ -252,7 +258,8 @@ class GroupGameHandler {
     if (!chat.isGroup || !command.startsWith('!')) return false;
 
     const groupId = chat.id._serialized;
-    const selectedGame = await this.getSelectedGame(groupId);
+    const configuredGame = await this.getSelectedGame(groupId);
+    const selectedGame = await this.resolveRuntimeGame(groupId, configuredGame);
 
     if (command === '!ping') {
       await msg.reply('🏓 Pong!');
@@ -265,7 +272,8 @@ class GroupGameHandler {
         `🎮 *MENU DE JOGOS*\n\n` +
         `${games.map((game) => `• *${game.key}* → ${game.description}`).join('\n')}\n\n` +
         `Comando: *!selecionarjogo paredao* ou *!selecionarjogo impostor*\n` +
-        `Jogo selecionado neste grupo: *${selectedGame.toUpperCase()}*`
+        `Para desmarcar: *!deselecionarjogo* (modo automático)\n` +
+        `Jogo configurado neste grupo: *${(configuredGame || 'auto').toUpperCase()}*`
       );
       return true;
     }
@@ -276,8 +284,21 @@ class GroupGameHandler {
         await msg.reply('❌ Jogos disponíveis: paredao, impostor. Use !menujogos');
         return true;
       }
+
+      if (configuredGame === option) {
+        await this.setSelectedGame(groupId, 'auto');
+        await msg.reply(`♻️ *${option.toUpperCase()}* foi desmarcado. O grupo voltou para modo *AUTO*.`);
+        return true;
+      }
+
       await this.setSelectedGame(groupId, option);
       await msg.reply(`✅ Jogo ativo do grupo definido para *${option.toUpperCase()}*.`);
+      return true;
+    }
+
+    if (command === '!deselecionarjogo') {
+      await this.setSelectedGame(groupId, 'auto');
+      await msg.reply('✅ Seleção fixa removida. Agora o grupo usa modo *AUTO*.');
       return true;
     }
 
@@ -287,6 +308,7 @@ class GroupGameHandler {
         `🎮 *GERAL*\n` +
         `!menujogos - Lista de jogos\n` +
         `!selecionarjogo [paredao|impostor] - Selecionar fluxo\n` +
+        `!deselecionarjogo - Voltar para seleção automática\n` +
         `!entrar [NUMERO NOME] - Entrar no jogo atual\n` +
         `!user [@membro] - Ver cadastro geral\n` +
         `!userhis [@membro] - Ver histórico de jogos\n` +

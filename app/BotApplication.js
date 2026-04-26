@@ -23,6 +23,7 @@ class BotApplication {
     this.client.on('ready', () => {
       this.isReady = true;
       this.reconnectAttempts = 0;
+      this.supremoCommands.startAutoGreetings();
       console.log('====================================');
       console.log('🤖 BOT MAESTRO PRONTO PARA AÇÃO!');
       console.log('====================================');
@@ -31,6 +32,7 @@ class BotApplication {
     this.client.on('disconnected', (reason) => {
       console.log('🔌 Desconectado:', reason);
       this.isReady = false;
+      this.supremoCommands.stopAutoGreetings();
       this.scheduleReconnect();
     });
 

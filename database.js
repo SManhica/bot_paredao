@@ -105,6 +105,21 @@ class Database {
         updated_at TIMESTAMP DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS supremo_immunity (
+        group_id VARCHAR(80) NOT NULL,
+        player_id VARCHAR(80) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (group_id, player_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS supremo_warnings (
+        group_id VARCHAR(80) NOT NULL,
+        player_id VARCHAR(80) NOT NULL,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (group_id, player_id)
+      );
+
       CREATE TABLE IF NOT EXISTS game_sessions (
         id SERIAL PRIMARY KEY,
         game_id INTEGER REFERENCES games(id) ON DELETE CASCADE,
@@ -119,6 +134,7 @@ class Database {
       );
 
       ALTER TABLE games ADD COLUMN IF NOT EXISTS game_type VARCHAR(20) DEFAULT 'paredao';
+      ALTER TABLE group_settings ALTER COLUMN selected_game DROP NOT NULL;
 
       CREATE INDEX IF NOT EXISTS idx_games_group_status ON games(group_id, status);
       CREATE INDEX IF NOT EXISTS idx_games_group_type_status ON games(group_id, game_type, status);
@@ -127,6 +143,8 @@ class Database {
       CREATE INDEX IF NOT EXISTS idx_questions_dm_message_id ON questions(dm_message_id);
       CREATE INDEX IF NOT EXISTS idx_players_dm_id ON players(dm_id) WHERE dm_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_game_sessions_group_type ON game_sessions(group_id, game_type, status);
+      CREATE INDEX IF NOT EXISTS idx_supremo_immunity_group ON supremo_immunity(group_id);
+      CREATE INDEX IF NOT EXISTS idx_supremo_warnings_group ON supremo_warnings(group_id);
     `;
     await this.query(sql);
   }
@@ -214,7 +232,12 @@ class Database {
       SELECT 
         g.id AS game_id,
         g.group_id,
-        g.game_type,
+        COALESCE(
+          NULLIF(g.game_type, ''),
+          gs.game_type,
+          CASE WHEN t.duration_minutes IS NOT NULL THEN 'paredao' END,
+          'desconhecido'
+        ) AS game_type,
         g.status,
         gp.turn_order,
         gp.joined_at,
@@ -223,6 +246,7 @@ class Database {
         t.duration_minutes
       FROM game_players gp
       JOIN games g ON g.id = gp.game_id
+      LEFT JOIN game_sessions gs ON gs.game_id = g.id
       LEFT JOIN LATERAL (
         SELECT tt.questions_received, tt.questions_answered, tt.duration_minutes
         FROM turns tt
@@ -276,17 +300,76 @@ class Database {
       'SELECT selected_game FROM group_settings WHERE group_id = $1 LIMIT 1',
       [groupId]
     );
-    return res.rows[0]?.selected_game || 'paredao';
+    return res.rows[0]?.selected_game || 'auto';
   }
 
   async setSelectedGame(groupId, gameType) {
+    const normalized = gameType || null;
     await this.query(`
       INSERT INTO group_settings(group_id, selected_game, updated_at)
       VALUES($1, $2, NOW())
       ON CONFLICT (group_id) DO UPDATE
       SET selected_game = EXCLUDED.selected_game,
           updated_at = NOW()
-    `, [groupId, gameType]);
+    `, [groupId, normalized]);
+  }
+
+  async addImmunity(groupId, playerId) {
+    await this.query(`
+      INSERT INTO supremo_immunity(group_id, player_id)
+      VALUES($1, $2)
+      ON CONFLICT (group_id, player_id) DO NOTHING
+    `, [groupId, playerId]);
+  }
+
+  async removeImmunity(groupId, playerId) {
+    await this.query(
+      'DELETE FROM supremo_immunity WHERE group_id = $1 AND player_id = $2',
+      [groupId, playerId]
+    );
+  }
+
+  async getImmunityList(groupId) {
+    const res = await this.query(
+      'SELECT player_id FROM supremo_immunity WHERE group_id = $1',
+      [groupId]
+    );
+    return res.rows.map((row) => row.player_id);
+  }
+
+  async isImmune(groupId, playerId) {
+    const res = await this.query(
+      'SELECT 1 FROM supremo_immunity WHERE group_id = $1 AND player_id = $2 LIMIT 1',
+      [groupId, playerId]
+    );
+    return Boolean(res.rows[0]);
+  }
+
+  async addWarning(groupId, playerId) {
+    const res = await this.query(`
+      INSERT INTO supremo_warnings(group_id, player_id, warning_count, updated_at)
+      VALUES($1, $2, 1, NOW())
+      ON CONFLICT (group_id, player_id) DO UPDATE
+      SET warning_count = supremo_warnings.warning_count + 1,
+          updated_at = NOW()
+      RETURNING warning_count
+    `, [groupId, playerId]);
+    return res.rows[0]?.warning_count || 0;
+  }
+
+  async clearWarnings(groupId, playerId) {
+    await this.query(
+      'DELETE FROM supremo_warnings WHERE group_id = $1 AND player_id = $2',
+      [groupId, playerId]
+    );
+  }
+
+  async getWarningCount(groupId, playerId) {
+    const res = await this.query(
+      'SELECT warning_count FROM supremo_warnings WHERE group_id = $1 AND player_id = $2 LIMIT 1',
+      [groupId, playerId]
+    );
+    return res.rows[0]?.warning_count || 0;
   }
 
   async upsertGameSession({ gameId, groupId, gameType, phase, state, status = 'active' }) {
