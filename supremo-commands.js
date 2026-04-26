@@ -8,6 +8,31 @@ class SupremoCommands {
     this.manager = gameManager;
     this.bansInProgress = new Map();
     this.powerTimers = new Map();
+    this.autoGreetingTimer = null;
+    this.lastGreetingSlotKeyByGroup = new Map();
+    this.autoGreetingSlots = [0, 7, 12, 17];
+    this.greetingsByHour = {
+      0: [
+        '🌙 Boa noite, tropa! Entramos em um novo dia. Que seja lendário.',
+        '✨ 00h em Moçambique! Hora de descansar ou dominar o mundo em silêncio.',
+        '🛌 Madrugada iniciada! Energia recarregando para o próximo caos do grupo.'
+      ],
+      7: [
+        '🌅 Bom dia, pessoal! 07h em Moçambique. Bora começar bem.',
+        '☀️ Manhã no ar! Que hoje traga vitórias para todos.',
+        '💪 Acorda, grupo! 07h chegou e o dia começou oficialmente.'
+      ],
+      12: [
+        '🍽️ Boa tarde, malta! 12h em Moçambique. Pausa estratégica merecida.',
+        '🌞 Meio-dia chegou! Boa tarde e bom apetite para quem vai almoçar.',
+        '⚡ 12h em ponto! Que a tarde venha produtiva e divertida.'
+      ],
+      17: [
+        '🌇 Final de tarde chegando! 17h em Moçambique. Força no resto do dia.',
+        '🍵 Boa tardinha, pessoal! Hora de desacelerar sem perder o ritmo.',
+        '🚀 17h batendo! Que a noite venha com boas notícias.'
+      ]
+    };
   }
 
   async getDisplayName(userId) {
@@ -43,6 +68,14 @@ class SupremoCommands {
       `!ban @membro - Banir com contagem regressiva épica\n` +
       `!banagora @membro - Ban imediato sem contagem\n` +
       `!randomban - Banir aleatoriamente alguém (surpresa!)\n` +
+      `!imunidadeadd @membro - Proteger de randomban\n` +
+      `!imunidaderem @membro - Remover imunidade\n` +
+      `!imunidadelist - Listar imunidades\n` +
+      `!aviso @membro - Aplicar aviso (3 = ban)\n` +
+      `!limparaviso @membro - Limpar avisos do membro\n` +
+      `!avisos @membro - Ver quantidade de avisos\n` +
+      `!trancar - Trancar grupo (apenas admins escrevem)\n` +
+      `!destrancar - Destrancar grupo\n` +
       `!poder - Mostrar seu poder atual\n` +
       `!poder @membro [min] - Conceder admin temporário\n` +
       `!tirarpoder @membro - Revogar poder/admin temporário\n` +
@@ -143,10 +176,17 @@ class SupremoCommands {
 
     try {
       const participants = await chat.participants;
-      const validParticipants = participants.filter(async p => 
-        !p.id._serialized.includes('@bot') && 
-        !(await this.isSupremo(p.id._serialized))
-      );
+      const immuneIds = new Set(await db.getImmunityList(chat.id._serialized));
+      const validParticipants = [];
+
+      for (const participant of participants) {
+        const participantId = participant.id?._serialized;
+        if (!participantId || participantId.includes('@bot')) continue;
+        if (participant.isAdmin || participant.isSuperAdmin) continue;
+        if (immuneIds.has(participantId)) continue;
+        if (await this.isSupremo(participantId)) continue;
+        validParticipants.push(participant);
+      }
 
       if (validParticipants.length === 0) {
         await chat.sendMessage("👻 *OPS...* Não tem ninguém para banir além de mim mesmo! Tente novamente quando tiver subordinados.");
@@ -172,6 +212,180 @@ class SupremoCommands {
       console.error('Erro no random ban:', error);
       await chat.sendMessage("❌ A roleta quebrou! O ban aleatório falhou... 😅");
     }
+  }
+
+  async addImmunity(chat, senderId, targetId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode conceder imunidade.');
+      return;
+    }
+
+    await db.addImmunity(chat.id._serialized, targetId);
+    await chat.sendMessage(
+      `🛡️ @${targetId.split('@')[0]} entrou na lista de *IMUNIDADE*.\n` +
+      `🎲 O !randomban não pode selecionar este membro.`,
+      { mentions: [targetId] }
+    );
+  }
+
+  async removeImmunity(chat, senderId, targetId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode remover imunidade.');
+      return;
+    }
+
+    await db.removeImmunity(chat.id._serialized, targetId);
+    await chat.sendMessage(
+      `🧯 Imunidade removida de @${targetId.split('@')[0]}.`,
+      { mentions: [targetId] }
+    );
+  }
+
+  async listImmunity(chat, senderId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode ver a lista de imunidade.');
+      return;
+    }
+
+    const ids = await db.getImmunityList(chat.id._serialized);
+    if (ids.length === 0) {
+      await chat.sendMessage('📭 Nenhum membro com imunidade no momento.');
+      return;
+    }
+
+    const names = await Promise.all(ids.map((id) => this.getDisplayName(id)));
+    const lines = names.map((name, i) => `${i + 1}. ${name}`);
+    await chat.sendMessage(`🛡️ *LISTA DE IMUNIDADE*\n\n${lines.join('\n')}`);
+  }
+
+  async addWarning(chat, senderId, targetId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode aplicar avisos.');
+      return;
+    }
+    if (await this.isSupremo(targetId)) {
+      await chat.sendMessage('👑 O SUPREMO não recebe avisos.');
+      return;
+    }
+
+    const count = await db.addWarning(chat.id._serialized, targetId);
+    await chat.sendMessage(
+      `⚠️ Aviso aplicado para @${targetId.split('@')[0]}.\n` +
+      `📌 Total: *${count}/3*`,
+      { mentions: [targetId] }
+    );
+
+    if (count >= 3) {
+      await db.clearWarnings(chat.id._serialized, targetId);
+      await chat.sendMessage(`🚨 Limite de avisos atingido. Ban automático ativado para @${targetId.split('@')[0]}.`, {
+        mentions: [targetId]
+      });
+      await this.executeBan(chat, targetId, false);
+    }
+  }
+
+  async clearWarning(chat, senderId, targetId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode limpar avisos.');
+      return;
+    }
+    await db.clearWarnings(chat.id._serialized, targetId);
+    await chat.sendMessage(`✅ Avisos de @${targetId.split('@')[0]} foram limpos.`, { mentions: [targetId] });
+  }
+
+  async showWarning(chat, senderId, targetId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode consultar avisos.');
+      return;
+    }
+    const count = await db.getWarningCount(chat.id._serialized, targetId);
+    await chat.sendMessage(`📊 @${targetId.split('@')[0]} tem *${count}/3* aviso(s).`, { mentions: [targetId] });
+  }
+
+  async lockGroup(chat, senderId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode trancar o grupo.');
+      return;
+    }
+    await chat.setMessagesAdminsOnly(true);
+    await chat.sendMessage('🔒 Grupo trancado. Apenas admins podem enviar mensagens.');
+  }
+
+  async unlockGroup(chat, senderId) {
+    if (!(await this.isSupremo(senderId))) {
+      await chat.sendMessage('❌ Apenas o SUPREMO pode destrancar o grupo.');
+      return;
+    }
+    await chat.setMessagesAdminsOnly(false);
+    await chat.sendMessage('🔓 Grupo destrancado. Todos podem enviar mensagens.');
+  }
+
+  getMozambiqueDateParts() {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Africa/Maputo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(new Date());
+    const get = (type) => parts.find((part) => part.type === type)?.value;
+    return {
+      year: Number(get('year')),
+      month: Number(get('month')),
+      day: Number(get('day')),
+      hour: Number(get('hour')),
+      minute: Number(get('minute'))
+    };
+  }
+
+  pickGreetingForHour(hour) {
+    const options = this.greetingsByHour[hour] || [];
+    if (options.length === 0) return null;
+    return options[Math.floor(Math.random() * options.length)];
+  }
+
+  async processScheduledGreetingsTick() {
+    const now = this.getMozambiqueDateParts();
+    if (!this.autoGreetingSlots.includes(now.hour) || now.minute !== 0) return;
+
+    const forcedGroups = (process.env.AUTO_GREETING_GROUP_IDS || process.env.SUPREMO_GROUP_ID || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    const chats = forcedGroups.length > 0
+      ? await Promise.all(forcedGroups.map((id) => this.client.getChatById(id).catch(() => null)))
+      : await this.client.getChats().catch(() => []);
+    const groups = chats.filter((chat) => chat?.isGroup);
+    const greeting = this.pickGreetingForHour(now.hour);
+    if (!greeting) return;
+
+    for (const group of groups) {
+      const slotKey = `${now.year}-${now.month}-${now.day}-${now.hour}`;
+      if (this.lastGreetingSlotKeyByGroup.get(group.id._serialized) === slotKey) continue;
+
+      await group.sendMessage(greeting).catch(() => null);
+      this.lastGreetingSlotKeyByGroup.set(group.id._serialized, slotKey);
+    }
+  }
+
+  startAutoGreetings() {
+    if (this.autoGreetingTimer) return;
+    this.autoGreetingTimer = setInterval(() => {
+      this.processScheduledGreetingsTick().catch((error) => {
+        console.error('Erro nas saudações automáticas:', error.message);
+      });
+    }, 60 * 1000);
+    this.processScheduledGreetingsTick().catch(() => null);
+  }
+
+  stopAutoGreetings() {
+    if (!this.autoGreetingTimer) return;
+    clearInterval(this.autoGreetingTimer);
+    this.autoGreetingTimer = null;
   }
 
   // Executar ban com contagem regressiva
